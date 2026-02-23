@@ -15,7 +15,7 @@ import {
   isValidMove,
   pathExists,
   shortestPathLength,
-} from "../../../shared/serviceGraph.js";
+} from "../../shared/serviceGraph.js";
 
 const adjacencyMap = buildAdjacencyMap();
 

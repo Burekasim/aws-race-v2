@@ -8,7 +8,7 @@ import {
   buildAdjacencyMap,
   isValidMove,
   shortestPathLength,
-} from "../../shared/serviceGraph.js";
+} from "../shared/serviceGraph.js";
 import { createGameToken, verifyGameToken } from "./lib/signing.js";
 
 const PORT = 3001;
