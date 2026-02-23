@@ -169,6 +169,8 @@ Resources:
       DistributionConfig:
         Enabled: true
         DefaultRootObject: index.html
+        Aliases:
+          - aws-race.avi.co.il
         Origins:
           - Id: S3Origin
             DomainName: !GetAtt FrontendBucket.RegionalDomainName
@@ -206,6 +208,10 @@ Resources:
           - ErrorCode: 404
             ResponseCode: 200
             ResponsePagePath: /index.html
+        ViewerCertificate:
+          AcmCertificateArn: arn:aws:acm:us-east-1:669962866722:certificate/5ed5ecac-75e3-4965-bc2c-4d7d66fa1bfa
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
 
   CloudFrontOAC:
     Type: AWS::CloudFront::OriginAccessControl
