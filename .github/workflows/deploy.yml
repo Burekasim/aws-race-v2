@@ -11,7 +11,8 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    steps:
+    environment: production
+    steps:      
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -20,14 +21,15 @@ jobs:
         with:
           node-version: 20
 
-      - name: Setup SAM CLI
-        uses: aws-actions/setup-sam@v2
-
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::669962866722:role/GitHubActionsRole
+          role-to-assume: ${{ vars.ROLE_ID }}
           aws-region: us-east-1
+          retry-max-attempts: 2
+
+      - name: Setup SAM CLI
+        uses: aws-actions/setup-sam@v2
 
       - name: Install backend dependencies
         run: cd backend && npm ci
@@ -44,6 +46,7 @@ jobs:
           --no-confirm-changeset
           --no-fail-on-empty-changeset
           --stack-name aws-service-race
+          --resolve-s3 --capabilities CAPABILITY_IAM
 
       - name: Extract SAM outputs
         id: sam-outputs
@@ -56,7 +59,7 @@ jobs:
       - name: Build frontend
         run: cd frontend && npm ci && npm run build
         env:
-          VITE_API_URL: https://${{ steps.sam-outputs.outputs.cloudfront_domain }}
+          VITE_API_URL: https://${{ vars.VITE_API_URL }}
 
       - name: Deploy frontend to S3
         run: aws s3 sync frontend/dist/ s3://${{ steps.sam-outputs.outputs.bucket_name }} --delete
