@@ -1,0 +1,65 @@
+name: Deploy AWS Service Race
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::669962866722:role/GitHubActionsRole
+          aws-region: us-east-1
+
+      - name: Install backend dependencies
+        run: cd backend && npm ci
+
+      - name: SAM build
+        run: sam build
+
+      - name: SAM deploy
+        run: >
+          sam deploy
+          --no-confirm-changeset
+          --no-fail-on-empty-changeset
+          --stack-name aws-service-race
+
+      - name: Extract SAM outputs
+        id: sam-outputs
+        run: |
+          STACK_OUTPUT=$(aws cloudformation describe-stacks --stack-name aws-service-race --query "Stacks[0].Outputs")
+          echo "cloudfront_domain=$(echo "$STACK_OUTPUT" | jq -r '.[] | select(.OutputKey=="CloudFrontDomain") | .OutputValue')" >> "$GITHUB_OUTPUT"
+          echo "bucket_name=$(echo "$STACK_OUTPUT" | jq -r '.[] | select(.OutputKey=="FrontendBucketName") | .OutputValue')" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$(echo "$STACK_OUTPUT" | jq -r '.[] | select(.OutputKey=="CloudFrontDistributionId") | .OutputValue')" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend
+        run: cd frontend && npm ci && npm run build
+        env:
+          VITE_API_URL: https://${{ steps.sam-outputs.outputs.cloudfront_domain }}
+
+      - name: Deploy frontend to S3
+        run: aws s3 sync frontend/dist/ s3://${{ steps.sam-outputs.outputs.bucket_name }} --delete
+
+      - name: Invalidate CloudFront cache
+        run: >
+          aws cloudfront create-invalidation
+          --distribution-id ${{ steps.sam-outputs.outputs.distribution_id }}
+          --paths "/*"

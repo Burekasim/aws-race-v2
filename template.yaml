@@ -1,0 +1,234 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AWS Service Race - Wikipedia Race style game for AWS services
+
+Globals:
+  Function:
+    Timeout: 10
+    Runtime: nodejs20.x
+    MemorySize: 256
+    Environment:
+      Variables:
+        CHALLENGES_TABLE: !Ref ChallengesTable
+        SCORES_TABLE: !Ref ScoresTable
+        GAME_SECRET: !Sub "aws-race-${AWS::AccountId}-secret"
+
+Resources:
+  # ── API Gateway ──
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type'"
+        AllowOrigin: "'*'"
+
+  # ── Lambda Function ──
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/api.handler
+      CodeUri: backend/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ChallengesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ScoresTable
+      Events:
+        ChallengeRandom:
+          Type: Api
+          Properties:
+            Path: /api/challenge/random
+            Method: get
+            RestApiId: !Ref ApiGateway
+        ChallengeCreate:
+          Type: Api
+          Properties:
+            Path: /api/challenge/create
+            Method: post
+            RestApiId: !Ref ApiGateway
+        ChallengeGet:
+          Type: Api
+          Properties:
+            Path: /api/challenge/{id}
+            Method: get
+            RestApiId: !Ref ApiGateway
+        GameStart:
+          Type: Api
+          Properties:
+            Path: /api/game/start
+            Method: post
+            RestApiId: !Ref ApiGateway
+        ScoreSubmit:
+          Type: Api
+          Properties:
+            Path: /api/score/submit
+            Method: post
+            RestApiId: !Ref ApiGateway
+        LeaderboardGlobal:
+          Type: Api
+          Properties:
+            Path: /api/leaderboard/global
+            Method: get
+            RestApiId: !Ref ApiGateway
+        LeaderboardChallenge:
+          Type: Api
+          Properties:
+            Path: /api/leaderboard/{challengeId}
+            Method: get
+            RestApiId: !Ref ApiGateway
+        Services:
+          Type: Api
+          Properties:
+            Path: /api/services
+            Method: get
+            RestApiId: !Ref ApiGateway
+
+  # ── DynamoDB Tables ──
+  ChallengesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: AWSServiceRace-Challenges
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: challengeId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: challengeId
+          KeyType: HASH
+
+  ScoresTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: AWSServiceRace-Scores
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: scoreId
+          AttributeType: S
+        - AttributeName: challengeId
+          AttributeType: S
+        - AttributeName: steps
+          AttributeType: N
+        - AttributeName: globalPK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: scoreId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: challengeId-steps-index
+          KeySchema:
+            - AttributeName: challengeId
+              KeyType: HASH
+            - AttributeName: steps
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: global-steps-index
+          KeySchema:
+            - AttributeName: globalPK
+              KeyType: HASH
+            - AttributeName: steps
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # ── S3 Bucket for Frontend ──
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "aws-service-race-frontend-${AWS::AccountId}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+  # ── CloudFront Distribution ──
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !Ref CloudFrontOAC
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: ApiOrigin
+            DomainName: !Sub "${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+            OriginPath: /prod
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          Compress: true
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: https-only
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # AllViewerExceptHostHeader
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "aws-service-race-oac-${AWS::AccountId}"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  FrontendBucketName:
+    Description: S3 bucket for frontend assets
+    Value: !Ref FrontendBucket
+  CloudFrontDomain:
+    Description: CloudFront distribution domain
+    Value: !GetAtt CloudFrontDistribution.DomainName
+  CloudFrontUrl:
+    Description: Full CloudFront URL
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID (for cache invalidation)
+    Value: !Ref CloudFrontDistribution
