@@ -32,6 +32,9 @@ jobs:
       - name: Install backend dependencies
         run: cd backend && npm ci
 
+      - name: Copy shared module into backend
+        run: cp -r shared backend/shared
+
       - name: SAM build
         run: sam build
 
